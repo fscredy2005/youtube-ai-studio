@@ -24,6 +24,7 @@ class VideoResult:
     summary_engine: str = "Free extractive"
     summary_note: str = ""
     error: str = ""
+    duration_source: str = ""
 
     @property
     def text(self) -> str:
