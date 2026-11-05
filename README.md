@@ -56,6 +56,12 @@ If the video duration is not available, enter the duration displayed in YouTube 
 
 Possible statuses: **No obvious timing issues**, **Review recommended**, **Partial check**, **Cannot assess**. Even a clean check cannot guarantee that every spoken word was captured. Gaps may indicate silence, music or missing captions. This audit runs locally, requires no extra API key and does not consume AI credits.
 
+### Automatic video duration and visual integrity timeline
+
+For a video analyzed with the existing `SUPADATA_API_KEY`, the app now requests **Supadata video metadata** after captions are retrieved. When the response supplies a valid duration, that independent value is used to check for captions ending early. The metadata request is a **separate call costing 1 Supadata credit per analysis** (subject to the provider's current pricing). The app does not make it if captions fail. If metadata is unavailable, no duration is inferred from caption timestamps; you can still enter YouTube's displayed video length manually.
+
+The integrity dashboard displays the independently reported duration, last subtitle endpoint, count and size of long gaps, and a colored timeline. Green represents timed caption intervals, amber represents gaps of at least 15 seconds, and red indicates potentially uncovered video beginnings/endings. Click the timestamped intervals under **Inspect suspected gaps and technical details** to verify them in the original video. Silence, music and inaccurate subtitles can yield false alarms; a clean timeline is **not proof of word-for-word completeness**.
+
 ### Costs, quotas and privacy
 
 - **Application hosting:** free within Community Cloud resource restrictions; cold starts/limited uptime possible. Not a guaranteed always-on production service.
