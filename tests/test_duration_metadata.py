@@ -37,7 +37,8 @@ def test_metadata_failure_keeps_transcript():
     base = {"title": "Title", "channel": "Channel", "duration": None, "thumbnail": ""}
     with patch("studio.youtube.retrieve_captions", return_value=(captions, "en")), \
          patch("studio.youtube.metadata", return_value=base), \
-         patch("studio.youtube.supadata_video_metadata", return_value=None):
+         patch("studio.youtube.supadata_video_metadata", return_value=None), \
+         patch("studio.youtube.youtube_duration_via_ytdlp", return_value=None):
         result = analyze_youtube(VIDEO_ID, supadata_key="dummy")
     assert len(result.segments) == 2
     assert result.duration is None
