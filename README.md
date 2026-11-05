@@ -60,6 +60,8 @@ Possible statuses: **No obvious timing issues**, **Review recommended**, **Parti
 
 For a video analyzed with the existing `SUPADATA_API_KEY`, the app now requests **Supadata video metadata** after captions are retrieved. When the response supplies a valid duration, that independent value is used to check for captions ending early. The metadata request is a **separate call costing 1 Supadata credit per analysis** (subject to the provider's current pricing). The app does not make it if captions fail. If metadata is unavailable, no duration is inferred from caption timestamps; you can still enter YouTube's displayed video length manually.
 
+If the Supadata metadata request fails, the app also attempts to read the YouTube duration using the already-installed yt-dlp library, **without downloading the video or using additional API credits**. Cloud IP restrictions can prevent both approaches; the manual duration field remains available.
+
 The integrity dashboard displays the independently reported duration, last subtitle endpoint, count and size of long gaps, and a colored timeline. Green represents timed caption intervals, amber represents gaps of at least 15 seconds, and red indicates potentially uncovered video beginnings/endings. Click the timestamped intervals under **Inspect suspected gaps and technical details** to verify them in the original video. Silence, music and inaccurate subtitles can yield false alarms; a clean timeline is **not proof of word-for-word completeness**.
 
 ### Costs, quotas and privacy
