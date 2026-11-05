@@ -43,6 +43,19 @@ As of November 2026, [Streamlit Community Cloud](https://docs.streamlit.io/deplo
 
 See: [official deployment walkthrough](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy) and [secrets documentation](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management).
 
+
+### Transcript Integrity Check
+
+After analyzing a video, the results page automatically checks caption timestamps for:
+
+- gaps of at least 15 seconds between caption intervals,
+- out-of-order or invalid timestamps,
+- captions that start late or end early **when an independent video duration is available**.
+
+If the video duration is not available, enter the duration displayed in YouTube (e.g. \`26:49\`) into **Video duration shown on YouTube**. The last subtitle timestamp is deliberately **not** treated as an independent video duration. Expand **Inspect timestamps, possible gaps and limitations** for suspicious intervals, which link back to YouTube.
+
+Possible statuses: **No obvious timing issues**, **Review recommended**, **Partial check**, **Cannot assess**. Even a clean check cannot guarantee that every spoken word was captured. Gaps may indicate silence, music or missing captions. This audit runs locally, requires no extra API key and does not consume AI credits.
+
 ### Costs, quotas and privacy
 
 - **Application hosting:** free within Community Cloud resource restrictions; cold starts/limited uptime possible. Not a guaranteed always-on production service.
