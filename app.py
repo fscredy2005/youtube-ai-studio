@@ -248,47 +248,92 @@ with details:
         st.caption(result.summary_note)
 
 st.markdown("##### 🔎 Transcript integrity check")
-st.caption("Checks caption timing for unusually long gaps or missing start/end portions. It cannot verify every word.")
-real_duration = result.duration if result.source in {"YouTube captions", "Supadata captions"} else None
+st.caption("Automatic timing checks identify suspicious gaps; they cannot prove that every spoken word is present.")
+real_duration = result.duration if result.video_id and result.duration_source else None
 duration_key = "reference_video_duration_" + (result.video_id or "uploaded")
-video_length = st.text_input(
-    "Video duration shown on YouTube (optional)",
-    placeholder="e.g. 26:49",
-    help="For a meaningful end-of-video comparison, enter the duration displayed on YouTube. "
-         "Caption timestamps alone cannot establish the actual video length.",
-    key=duration_key,
-)
+with st.expander("Optional: correct or enter the video's length"):
+    video_length = st.text_input(
+        "Video duration shown on YouTube",
+        placeholder="e.g. 26:49",
+        help="Normally detected via Supadata metadata (1 additional credit per analysis). "
+             "Enter YouTube's displayed length if metadata was unavailable or inaccurate.",
+        key=duration_key,
+    )
 try:
     manual_duration = parse_video_duration(video_length)
     audit = check_integrity(result.segments, manual_duration if manual_duration is not None else real_duration)
 except ValueError as exc:
     st.warning(str(exc))
+    manual_duration = None
     audit = check_integrity(result.segments, real_duration)
 
-if audit.status == "Review recommended":
-    st.warning("**Review recommended:** " + audit.summary)
-elif audit.status == "No obvious timing issues":
-    st.info("**No obvious timing issues:** " + audit.summary)
+if manual_duration is not None:
+    st.caption("Video duration source: **YouTube length entered manually** (overrides metadata).")
+elif real_duration is not None:
+    st.caption("Video duration source: **Supadata video metadata** (independent of caption timestamps).")
 else:
-    st.info("**" + audit.status + ":** " + audit.summary)
+    st.caption("Video duration could not be obtained automatically. You can add it above for a stronger check.")
 
-with st.expander("Inspect timestamps, possible gaps and limitations"):
-    ca, cb, cc = st.columns(3)
-    ca.metric("First caption", timestamp(audit.first_start) if audit.first_start is not None else "Unknown")
-    cb.metric("Last caption end", timestamp(audit.last_end) if audit.last_end is not None else "Unknown")
-    cc.metric("Independent video duration", timestamp(audit.reference_duration) if audit.reference_duration else "Unknown")
-    st.caption(f"{len(audit.gaps)} possible internal gaps (15 seconds or longer) · "
-               f"{audit.out_of_order} out-of-order timestamps · {audit.invalid_timing} invalid intervals")
-    if audit.gaps:
-        st.markdown("**Intervals to review on YouTube**")
-        for gap in sorted(audit.gaps, key=lambda g: g.seconds, reverse=True)[:10]:
-            label = f"{timestamp(gap.start)}–{timestamp(gap.end)} ({gap.seconds:.0f} s)"
+if audit.status == "Review recommended":
+    st.warning("**Review recommended.** " + audit.summary)
+elif audit.status == "No obvious timing issues":
+    st.success("**No obvious timing issues.** " + audit.summary)
+else:
+    st.info("**" + audit.status + ".** " + audit.summary)
+
+largest_gap = max((gap.seconds for gap in audit.gaps), default=0)
+mc1, mc2, mc3, mc4 = st.columns(4)
+mc1.metric("Actual video length", timestamp(audit.reference_duration) if audit.reference_duration else "Unknown")
+mc2.metric("Last caption endpoint", timestamp(audit.last_end) if audit.last_end is not None else "Unknown")
+mc3.metric("Long gaps (≥15s)", len(audit.gaps))
+mc4.metric("Longest internal gap", f"{largest_gap:.0f} s" if largest_gap else "None")
+
+# Colored timeline shows only timing intervals, NOT semantic or word-level coverage.
+bar_duration = audit.reference_duration or audit.last_end
+if bar_duration and bar_duration > 0:
+    intervals = [(gap.start, gap.end, "internal") for gap in audit.gaps]
+    if audit.reference_duration and audit.first_start is not None and audit.first_start > 0:
+        intervals.append((0.0, audit.first_start, "start"))
+    if audit.reference_duration and audit.last_end is not None and audit.last_end < audit.reference_duration:
+        intervals.append((audit.last_end, audit.reference_duration, "end"))
+    colored = []
+    for interval_start, interval_end, kind in intervals:
+        left_pct = max(0.0, min(100.0, interval_start / bar_duration * 100))
+        width_pct = max(0.0, min(100.0 - left_pct, (interval_end - interval_start) / bar_duration * 100))
+        if width_pct:
+            color = "#ef4444" if kind in {"start", "end"} else "#f59e0b"
+            colored.append(f'<span style="position:absolute;left:{left_pct:.5f}%;width:{width_pct:.5f}%;'
+                           f'height:100%;background:{color};"></span>')
+    st.markdown('<div role="img" aria-label="Green caption timeline; amber indicates internal gaps; '
+                'red indicates unavailable start or end sections" '
+                'style="position:relative;width:100%;height:18px;border-radius:7px;'
+                'overflow:hidden;background:#10b981;">' + ''.join(colored) + '</div>',
+                unsafe_allow_html=True)
+    st.caption("🟩 Caption intervals · 🟧 Gaps ≥15 seconds · 🟥 Uncovered beginning/end. "
+               "Silence or music can also produce gaps; this is not a word-accuracy score.")
+
+with st.expander("Inspect suspected gaps and technical details"):
+    entries = []
+    if audit.reference_duration and audit.first_start is not None and audit.first_start > 0:
+        entries.append((0.0, audit.first_start, "Beginning without captions"))
+    entries.extend((gap.start, gap.end, "Internal gap") for gap in audit.gaps)
+    if audit.reference_duration and audit.last_end is not None and audit.last_end < audit.reference_duration:
+        entries.append((audit.last_end, audit.reference_duration, "End without captions"))
+    if entries:
+        st.markdown("**Intervals worth reviewing on YouTube**")
+        for start_sec, stop_sec, label in sorted(entries, key=lambda row: row[1] - row[0], reverse=True)[:12]:
+            interval_text = (f"{label}: {timestamp(start_sec)}–{timestamp(stop_sec)} "
+                             f"({stop_sec - start_sec:.0f} s)")
             if result.video_id:
-                st.markdown(f"- [{label}]({youtube_at(result.video_id, gap.start)})")
+                st.markdown(f"- [{interval_text}]({youtube_at(result.video_id, start_sec)})")
             else:
-                st.markdown("- " + label)
-        if len(audit.gaps) > 10:
-            st.caption(f"Showing the 10 longest of {len(audit.gaps)} intervals.")
+                st.markdown("- " + interval_text)
+        if len(entries) > 12:
+            st.caption(f"Showing 12 of {len(entries)} intervals.")
+    else:
+        st.caption("No suspicious intervals at the configured 15-second threshold.")
+    st.caption(f"{audit.out_of_order} out-of-order timestamps · {audit.invalid_timing} invalid intervals · "
+               f"{audit.overlaps} substantial overlapping intervals · {audit.zero_duration} zero-duration captions")
     for note in audit.notes:
         st.caption("• " + note)
 
