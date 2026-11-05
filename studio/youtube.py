@@ -1,5 +1,6 @@
 """Strict YouTube URL parsing and caption retrieval. No URL is fetched directly from user input."""
 from __future__ import annotations
+import math
 import re
 import time
 from urllib.parse import parse_qs, urlsplit
@@ -65,6 +66,44 @@ def metadata(video_id: str) -> dict:
     except (requests.RequestException, ValueError, TypeError):
         pass
     return data
+
+
+def supadata_video_metadata(video_id: str, api_key: str) -> dict | None:
+    """Independently fetch video duration; Supadata metadata calls use a credit."""
+    if not api_key or not VIDEO_ID.fullmatch(video_id):
+        return None
+    try:
+        response = requests.get(
+            "https://api.supadata.ai/v1/metadata",
+            headers={"x-api-key": api_key},
+            params={"url": f"https://www.youtube.com/watch?v={video_id}"},
+            timeout=12,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("platform") not in (None, "youtube"):
+            return None
+        if payload.get("id") and payload["id"] != video_id:
+            return None
+        media = payload.get("media") if isinstance(payload.get("media"), dict) else {}
+        duration_value = media.get("duration", payload.get("duration"))
+        if isinstance(duration_value, bool):
+            return None
+        duration = float(duration_value)
+        if not math.isfinite(duration) or not 0 < duration <= 604800:
+            return None
+        author = payload.get("author") if isinstance(payload.get("author"), dict) else {}
+        channel = author.get("displayName") or author.get("name")
+        if not channel:
+            cd = payload.get("channel")
+            channel = cd.get("name") if isinstance(cd, dict) else None
+        return {
+            "duration": duration,
+            "title": str(payload["title"])[:300] if isinstance(payload.get("title"), str) and payload["title"].strip() else None,
+            "channel": str(channel)[:120] if isinstance(channel, str) and channel.strip() else None,
+        }
+    except (requests.RequestException, ValueError, TypeError, KeyError, OverflowError):
+        return None
 
 
 def retrieve_captions(video_id: str, preferred: str = "Auto") -> tuple[list[Segment], str]:
@@ -161,7 +200,6 @@ def retrieve_supadata_captions(video_id: str, api_key: str, preferred: str = "Au
 
 def analyze_youtube(url: str, preferred: str = "Auto", supadata_key: str = "") -> VideoResult:
     video_id = parse_video_id(url)
-    info = metadata(video_id)
     source = "YouTube captions"
     try:
         segments, language = retrieve_captions(video_id, preferred)
@@ -173,9 +211,21 @@ def analyze_youtube(url: str, preferred: str = "Auto", supadata_key: str = "") -
             source = "Supadata captions"
         except CaptionsUnavailable as fallback_error:
             raise CaptionsUnavailable(str(primary_error) + " Hosted fallback: " + str(fallback_error)) from fallback_error
+    # Metadata lookup occurs after caption retrieval, avoiding unnecessary credits on failures.
+    info = metadata(video_id)
+    duration_source = ""
+    extra = supadata_video_metadata(video_id, supadata_key) if supadata_key else None
+    if extra:
+        info["duration"] = extra["duration"]
+        duration_source = "Supadata metadata"
+        if extra["title"]:
+            info["title"] = extra["title"]
+        if extra["channel"]:
+            info["channel"] = extra["channel"]
     return VideoResult(video_id=video_id, title=info["title"], channel=info["channel"],
                        duration=info["duration"],
-                       thumbnail=info["thumbnail"], language=language, segments=segments, source=source)
+                       thumbnail=info["thumbnail"], language=language, segments=segments, source=source,
+                       duration_source=duration_source)
 
 
 def retrieve_translation(video_id: str, original_language: str, target_language: str) -> list[Segment]:
