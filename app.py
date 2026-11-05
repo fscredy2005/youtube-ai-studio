@@ -12,6 +12,7 @@ from studio.audio import transcribe_upload, AudioError
 from studio.summary import (STYLES, timestamp, youtube_at, generate_summary,
                             extractive, find_related, ask_gemini)
 from studio.chapters import suggested_chapters
+from studio.integrity import check_integrity, parse_video_duration
 from studio.export import transcript_txt, transcript_srt, report_markdown, report_pdf
 
 st.set_page_config(page_title="YouTube AI Studio", page_icon="🎬", layout="wide",
@@ -239,12 +240,57 @@ with details:
     m1, m2, m3 = st.columns(3)
     m1.metric("Caption passages", f"{len(result.segments):,}")
     m2.metric("Words", f"{len(result.text.split()):,}")
-    m3.metric("Transcript coverage", timestamp(result.segments[-1].start + result.segments[-1].duration))
+    m3.metric("Last caption time", timestamp(max(s.start + max(0, s.duration) for s in result.segments)))
     if result.url:
         st.link_button("▶ Open video on YouTube", result.url)
     st.markdown(f'<span class="round-label">{result.summary_engine}</span>', unsafe_allow_html=True)
     if result.summary_note:
         st.caption(result.summary_note)
+
+st.markdown("##### 🔎 Transcript integrity check")
+st.caption("Checks caption timing for unusually long gaps or missing start/end portions. It cannot verify every word.")
+real_duration = result.duration if result.source in {"YouTube captions", "Supadata captions"} else None
+duration_key = "reference_video_duration_" + (result.video_id or "uploaded")
+video_length = st.text_input(
+    "Video duration shown on YouTube (optional)",
+    placeholder="e.g. 26:49",
+    help="For a meaningful end-of-video comparison, enter the duration displayed on YouTube. "
+         "Caption timestamps alone cannot establish the actual video length.",
+    key=duration_key,
+)
+try:
+    manual_duration = parse_video_duration(video_length)
+    audit = check_integrity(result.segments, manual_duration if manual_duration is not None else real_duration)
+except ValueError as exc:
+    st.warning(str(exc))
+    audit = check_integrity(result.segments, real_duration)
+
+if audit.status == "Review recommended":
+    st.warning("**Review recommended:** " + audit.summary)
+elif audit.status == "No obvious timing issues":
+    st.info("**No obvious timing issues:** " + audit.summary)
+else:
+    st.info("**" + audit.status + ":** " + audit.summary)
+
+with st.expander("Inspect timestamps, possible gaps and limitations"):
+    ca, cb, cc = st.columns(3)
+    ca.metric("First caption", timestamp(audit.first_start) if audit.first_start is not None else "Unknown")
+    cb.metric("Last caption end", timestamp(audit.last_end) if audit.last_end is not None else "Unknown")
+    cc.metric("Independent video duration", timestamp(audit.reference_duration) if audit.reference_duration else "Unknown")
+    st.caption(f"{len(audit.gaps)} possible internal gaps (15 seconds or longer) · "
+               f"{audit.out_of_order} out-of-order timestamps · {audit.invalid_timing} invalid intervals")
+    if audit.gaps:
+        st.markdown("**Intervals to review on YouTube**")
+        for gap in sorted(audit.gaps, key=lambda g: g.seconds, reverse=True)[:10]:
+            label = f"{timestamp(gap.start)}–{timestamp(gap.end)} ({gap.seconds:.0f} s)"
+            if result.video_id:
+                st.markdown(f"- [{label}]({youtube_at(result.video_id, gap.start)})")
+            else:
+                st.markdown("- " + label)
+        if len(audit.gaps) > 10:
+            st.caption(f"Showing the 10 longest of {len(audit.gaps)} intervals.")
+    for note in audit.notes:
+        st.caption("• " + note)
 
 (t_overview, t_summary, t_transcript, t_chapters, t_export, t_ask, t_compare) = st.tabs(
     ["📌 Overview", "✨ AI Summary", "📝 Transcript", "🕒 Timeline", "⬇️ Export", "💬 Ask", "⚖️ Compare"])
