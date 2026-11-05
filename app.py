@@ -270,9 +270,9 @@ except ValueError as exc:
 if manual_duration is not None:
     st.caption("Video duration source: **YouTube length entered manually** (overrides metadata).")
 elif real_duration is not None:
-    st.caption("Video duration source: **Supadata video metadata** (independent of caption timestamps).")
+    st.caption(f"Video duration source: **{result.duration_source}** (independent of caption timestamps).")
 else:
-    st.caption("Video duration could not be obtained automatically. You can add it above for a stronger check.")
+    st.caption("Duration unavailable from Supadata and direct YouTube metadata. Expand the field above to enter the length shown on YouTube. Caption end times cannot be used as an independent duration.")
 
 if audit.status == "Review recommended":
     st.warning("**Review recommended.** " + audit.summary)
