@@ -86,7 +86,7 @@ def supadata_video_metadata(video_id: str, api_key: str) -> dict | None:
         if payload.get("id") and payload["id"] != video_id:
             return None
         media = payload.get("media") if isinstance(payload.get("media"), dict) else {}
-        duration_value = media.get("duration", payload.get("duration"))
+        duration_value = media.get("duration") or payload.get("duration")
         if isinstance(duration_value, bool):
             return None
         duration = float(duration_value)
@@ -104,6 +104,39 @@ def supadata_video_metadata(video_id: str, api_key: str) -> dict | None:
         }
     except (requests.RequestException, ValueError, TypeError, KeyError, OverflowError):
         return None
+
+
+def youtube_duration_via_ytdlp(video_id: str) -> float | None:
+    """Best-effort independent YouTube duration, without downloading media.
+
+    Runs only when Supadata metadata is unavailable. YouTube may block hosted IPs.
+    Never treat caption end timestamps as the actual video length.
+    """
+    if not VIDEO_ID.fullmatch(video_id):
+        return None
+    try:
+        from yt_dlp import YoutubeDL
+        opts = {
+            "quiet": True, "no_warnings": True, "skip_download": True,
+            "noplaylist": True, "socket_timeout": 5, "retries": 0,
+            "extractor_retries": 0, "ignoreerrors": True,
+        }
+        with YoutubeDL(opts) as client:
+            meta = client.extract_info(
+                f"https://www.youtube.com/watch?v={video_id}", download=False
+            )
+        if not isinstance(meta, dict) or meta.get("id") not in (None, video_id):
+            return None
+        value = meta.get("duration")
+        if value is None or isinstance(value, bool):
+            return None
+        seconds = float(value)
+        if math.isfinite(seconds) and 0 < seconds <= 604800:
+            return seconds
+    except Exception:
+        # Optional metadata may fail on cloud IPs; keep existing transcripts available.
+        return None
+    return None
 
 
 def retrieve_captions(video_id: str, preferred: str = "Auto") -> tuple[list[Segment], str]:
@@ -222,6 +255,11 @@ def analyze_youtube(url: str, preferred: str = "Auto", supadata_key: str = "") -
             info["title"] = extra["title"]
         if extra["channel"]:
             info["channel"] = extra["channel"]
+    if not info.get("duration"):
+        fallback_duration = youtube_duration_via_ytdlp(video_id)
+        if fallback_duration:
+            info["duration"] = fallback_duration
+            duration_source = "YouTube metadata (no download)"
     return VideoResult(video_id=video_id, title=info["title"], channel=info["channel"],
                        duration=info["duration"],
                        thumbnail=info["thumbnail"], language=language, segments=segments, source=source,
