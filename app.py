@@ -282,6 +282,13 @@ else:
     st.info("**" + audit.status + ".** " + audit.summary)
 
 largest_gap = max((gap.seconds for gap in audit.gaps), default=0)
+# Ignore tiny edge offsets (e.g. the first caption at 0.2s) in the visual warnings.
+# These are common timestamp rounding artifacts, not intervals worth reviewing.
+MIN_VISIBLE_EDGE_GAP = 3.0
+visible_start_gap = (audit.reference_duration is not None and audit.first_start is not None
+                     and audit.first_start >= MIN_VISIBLE_EDGE_GAP)
+visible_end_gap = (audit.reference_duration is not None and audit.last_end is not None
+                   and audit.reference_duration - audit.last_end >= MIN_VISIBLE_EDGE_GAP)
 mc1, mc2, mc3, mc4 = st.columns(4)
 mc1.metric("Actual video length", timestamp(audit.reference_duration) if audit.reference_duration else "Unknown")
 mc2.metric("Last caption endpoint", timestamp(audit.last_end) if audit.last_end is not None else "Unknown")
@@ -292,9 +299,9 @@ mc4.metric("Longest internal gap", f"{largest_gap:.0f} s" if largest_gap else "N
 bar_duration = audit.reference_duration or audit.last_end
 if bar_duration and bar_duration > 0:
     intervals = [(gap.start, gap.end, "internal") for gap in audit.gaps]
-    if audit.reference_duration and audit.first_start is not None and audit.first_start > 0:
+    if visible_start_gap:
         intervals.append((0.0, audit.first_start, "start"))
-    if audit.reference_duration and audit.last_end is not None and audit.last_end < audit.reference_duration:
+    if visible_end_gap:
         intervals.append((audit.last_end, audit.reference_duration, "end"))
     colored = []
     for interval_start, interval_end, kind in intervals:
@@ -314,10 +321,10 @@ if bar_duration and bar_duration > 0:
 
 with st.expander("Inspect suspected gaps and technical details"):
     entries = []
-    if audit.reference_duration and audit.first_start is not None and audit.first_start > 0:
+    if visible_start_gap:
         entries.append((0.0, audit.first_start, "Beginning without captions"))
     entries.extend((gap.start, gap.end, "Internal gap") for gap in audit.gaps)
-    if audit.reference_duration and audit.last_end is not None and audit.last_end < audit.reference_duration:
+    if visible_end_gap:
         entries.append((audit.last_end, audit.reference_duration, "End without captions"))
     if entries:
         st.markdown("**Intervals worth reviewing on YouTube**")
