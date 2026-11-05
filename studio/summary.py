@@ -95,7 +95,7 @@ def extractive(segments: list[Segment], style: str, video_id: str) -> str:
     return intro + "\n\n" + "\n".join(_line(video_id, sec, text) for sec, text in units)
 
 
-def chunk_segments(segments: list[Segment], target_chars: int = 12500) -> list[str]:
+def chunk_segments(segments: list[Segment], target_chars: int = 60000) -> list[str]:
     chunks: list[str] = []
     current: list[str] = []
     total = 0
@@ -176,6 +176,30 @@ def gemini_summary(segments: list[Segment], style: str, video_id: str,
     return linkify_timestamp_marks(output, video_id)
 
 
+def friendly_gemini_error(exc: Exception) -> str:
+    """Safe, actionable guidance; never render the provider error body or API secrets."""
+    raw_code = getattr(exc, "code", None)
+    try:
+        code = int(raw_code)
+    except (TypeError, ValueError):
+        code = None
+    retry_hint = "Open AI Summary and click Generate selected format to retry without retrieving captions again."
+    if code in (500, 502, 503, 504):
+        return f"Gemini is temporarily unavailable (HTTP {code}). {retry_hint}"
+    if code == 429:
+        return ("Gemini rate limit or quota reached (HTTP 429). Check limits in Google AI Studio; "
+                "try again after your quota resets.")
+    if code in (401, 403):
+        return (f"Gemini authentication/permission error (HTTP {code}). "
+                "Check the GEMINI_API_KEY in private Streamlit Secrets.")
+    if code == 404:
+        return ("Gemini model not found or unavailable (HTTP 404). "
+                "Check GEMINI_MODEL in private Streamlit Secrets.")
+    if code == 400:
+        return "Gemini rejected the request (HTTP 400). Try a shorter transcript or another supported model."
+    return f"Gemini could not generate a summary ({type(exc).__name__}). {retry_hint}"
+
+
 def generate_summary(segments: list[Segment], style: str, video_id: str,
                      target_language: str = "English", api_key: str = "", model: str = "gemini-2.5-flash-lite") -> tuple[str, str, str]:
     if api_key:
@@ -184,7 +208,7 @@ def generate_summary(segments: list[Segment], style: str, video_id: str,
         except Exception as exc:
             # Don't expose arbitrary provider error bodies, which can include details about the account.
             return (extractive(segments, style, video_id), "Free extractive",
-                    f"AI service unavailable ({type(exc).__name__}); showing offline extractive passages.")
+                    friendly_gemini_error(exc))
     return (extractive(segments, style, video_id), "Free extractive",
             "Extractive free mode selects representative passages; it does not paraphrase, translate, or verify conclusions.")
 
