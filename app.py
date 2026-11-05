@@ -125,6 +125,10 @@ with st.sidebar:
     else:
         st.info("🆓 Free extractive mode · no API key needed")
     st.caption("Add GEMINI_API_KEY to your private Streamlit secrets for generative summaries and bilingual output.")
+    if read_setting("SUPADATA_API_KEY"):
+        st.success("Cloud captions fallback ready")
+    else:
+        st.caption("Optional SUPADATA_API_KEY enables a hosted caption fallback when YouTube blocks the server.")
     st.divider()
     st.markdown("### 🗂 Recent analyses")
     history = st.session_state.get("history", {})
@@ -176,7 +180,7 @@ if analyze_clicked:
         try:
             with st.status("Analyzing video…", expanded=True) as status:
                 st.write("Checking the link and fetching public captions…")
-                result = analyze_youtube(link, pref)
+                result = analyze_youtube(link, pref, read_setting("SUPADATA_API_KEY"))
                 st.write(f"Loaded {len(result.segments)} transcript passages. Creating your summary…")
                 set_result(result, chosen_style, target_language)
                 status.update(label="Analysis complete", state="complete")
@@ -218,7 +222,7 @@ if not result:
     with c3:
         st.markdown("**③ Explore & export**")
         st.caption("Navigate timestamps, search captions, ask questions and download your report.")
-    st.info("Free mode works without an API key, but it selects transcript excerpts rather than writing a new AI-generated summary. Caption access can be blocked on cloud servers.")
+    st.info("Free mode selects transcript excerpts rather than writing a generative summary. Cloud caption access can be blocked; optionally configure SUPADATA_API_KEY in Streamlit secrets or paste a transcript under More options.")
     st.stop()
 
 st.divider()
