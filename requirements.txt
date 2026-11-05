@@ -1,0 +1,7 @@
+streamlit>=1.46,<2
+requests>=2.32,<3
+youtube-transcript-api>=1.2,<2
+google-genai>=1.24,<3
+reportlab>=4.2,<5
+faster-whisper>=1.1,<2
+yt-dlp>=2025.1.1
