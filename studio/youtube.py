@@ -174,7 +174,7 @@ def analyze_youtube(url: str, preferred: str = "Auto", supadata_key: str = "") -
         except CaptionsUnavailable as fallback_error:
             raise CaptionsUnavailable(str(primary_error) + " Hosted fallback: " + str(fallback_error)) from fallback_error
     return VideoResult(video_id=video_id, title=info["title"], channel=info["channel"],
-                       duration=info["duration"] or (segments[-1].start + segments[-1].duration),
+                       duration=info["duration"],
                        thumbnail=info["thumbnail"], language=language, segments=segments, source=source)
 
 
