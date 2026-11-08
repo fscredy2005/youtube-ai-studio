@@ -4,6 +4,8 @@ import os
 import re
 from copy import deepcopy
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import streamlit as st
 
 from studio.models import Segment, VideoResult
@@ -13,7 +15,7 @@ from studio.summary import (STYLES, timestamp, youtube_at, generate_summary,
                             extractive, find_related, ask_gemini)
 from studio.chapters import suggested_chapters
 from studio.integrity import check_integrity, parse_video_duration
-from studio.credits import fetch_supadata_balance
+from studio.credits import fetch_supadata_balance, parse_reset_date, next_expected_monthly_reset
 from studio.export import transcript_txt, transcript_srt, report_markdown, report_pdf
 
 st.set_page_config(page_title="YouTube AI Studio", page_icon="🎬", layout="wide",
@@ -247,6 +249,32 @@ with st.container(border=True):
                             if balance.max_credits else 0.0)
         st.caption("Supadata credits are not Gemini tokens. Native caption fallback and "
                    "video metadata can use credits; pasted transcripts use none.")
+        with st.expander("📅 Monthly credit reset date", expanded=False):
+            date_text = st.text_input(
+                "Next reset date shown in Supadata (YYYY-MM-DD)",
+                value=read_setting("SUPADATA_RESET_DATE"),
+                key="supadata_reset_date_input",
+                placeholder="YYYY-MM-DD",
+                help="Look in your Supadata account dashboard. The /me API does not return a reset date.",
+            )
+            st.caption("This input lasts for your browser session. To keep the date after "
+                       "reopening the app, add SUPADATA_RESET_DATE = \"YYYY-MM-DD\" "
+                       "to private Streamlit secrets.")
+        try:
+            supplied_reset = parse_reset_date(date_text)
+        except ValueError as exc:
+            st.warning(str(exc))
+            supplied_reset = None
+        if supplied_reset:
+            today_paris = datetime.now(ZoneInfo("Europe/Paris")).date()
+            expected = next_expected_monthly_reset(supplied_reset, today_paris)
+            days = (expected - today_paris).days
+            count_label = "today" if days == 0 else f"in {days} day{'s' if days != 1 else ''}"
+            st.markdown(f"**Next expected credit reset: {expected:%d %b %Y} ({count_label})**")
+            st.caption("Estimate based on your supplied date and a calendar-month cycle, "
+                       "not an API-confirmed renewal. Verify it in the Supadata dashboard.")
+        else:
+            st.caption("Next reset date: unknown · Supadata does not provide it via the account API.")
 
 result: VideoResult | None = st.session_state.get("current")
 if not result:
