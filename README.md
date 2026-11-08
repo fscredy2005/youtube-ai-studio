@@ -80,6 +80,29 @@ not. Video metadata may consume a credit even if captions came directly from
 YouTube. Account-status errors do not block the rest of the application. The API
 key is never shown in the interface or committed to GitHub.
 
+### Monthly credit reset date (optional)
+
+Supadata renews monthly credits, but its documented `GET /v1/me` account API
+**does not return a reset date**. The app deliberately does not guess this from
+your current usage or assume every month has exactly 30 days.
+
+Open **Monthly credit reset date** beneath the Supadata credit balance and enter
+the **next credit-reset date shown in your Supadata dashboard** as `YYYY-MM-DD`.
+The app will show an **estimated next reset and days remaining** for the
+Europe/Paris timezone. Future dates are projected by calendar month (a 31st
+becomes the last day in shorter months); they are **not provider-confirmed**.
+
+The entered date lasts for the current Streamlit browser session. To make it
+persistent across sessions, set this optional value in your **private Streamlit
+Community Cloud secrets** (never the public GitHub repository):
+
+```toml
+SUPADATA_RESET_DATE = "2026-11-21"  # Example only; replace with your actual date
+```
+
+No additional paid API calls, tracking service or key are needed. Check your
+dashboard again if your subscription changes or the renewal date differs.
+
 ### Costs, quotas and privacy
 
 - **Application hosting:** free within Community Cloud resource restrictions; cold starts/limited uptime possible. Not a guaranteed always-on production service.
