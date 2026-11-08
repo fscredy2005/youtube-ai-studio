@@ -58,7 +58,7 @@ def parse_reset_date(value: str) -> date | None:
     value = (value or "").strip()
     if not value:
         return None
-    if not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}", value):
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
         raise ValueError("Use YYYY-MM-DD, for example 2026-11-21.")
     try:
         return date.fromisoformat(value)
