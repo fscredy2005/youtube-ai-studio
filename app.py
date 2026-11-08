@@ -13,6 +13,7 @@ from studio.summary import (STYLES, timestamp, youtube_at, generate_summary,
                             extractive, find_related, ask_gemini)
 from studio.chapters import suggested_chapters
 from studio.integrity import check_integrity, parse_video_duration
+from studio.credits import fetch_supadata_balance
 from studio.export import transcript_txt, transcript_srt, report_markdown, report_pdf
 
 st.set_page_config(page_title="YouTube AI Studio", page_icon="🎬", layout="wide",
@@ -46,6 +47,12 @@ def read_setting(name: str, default: str = "") -> str:
     except Exception:
         # Streamlit raises a framework-specific exception when secrets.toml is absent.
         return default
+
+
+@st.cache_data(ttl=90, show_spinner=False)
+def cached_supadata_balance(api_key: str):
+    """Short-lived cache avoids fetching account status on every Streamlit rerun."""
+    return fetch_supadata_balance(api_key)
 
 
 def language_label(code: str) -> str:
@@ -189,6 +196,10 @@ if analyze_clicked:
             st.error(str(exc))
         except Exception:
             st.error("The video could not be analyzed. Check the URL or try an uploaded transcript.")
+        finally:
+            # A successful analysis can spend Supadata transcript and/or metadata credits.
+            if read_setting("SUPADATA_API_KEY"):
+                cached_supadata_balance.clear()
 
 if upload_clicked:
     try:
@@ -209,6 +220,33 @@ if paste_clicked:
             set_result(result, chosen_style, target_language)
     except ValueError as exc:
         st.error(str(exc))
+
+# Read-only provider quota display; independent of Gemini token usage.
+supadata_key = read_setting("SUPADATA_API_KEY")
+with st.container(border=True):
+    heading, refresh = st.columns([4, 1], vertical_alignment="center")
+    with heading:
+        st.markdown("**☁️ Supadata extraction credits**")
+    with refresh:
+        if st.button("↻ Refresh", key="refresh_supadata_credits",
+                     disabled=not bool(supadata_key), use_container_width=True):
+            cached_supadata_balance.clear()
+    if not supadata_key:
+        st.caption("Add SUPADATA_API_KEY to your private Streamlit secrets to show your balance.")
+    else:
+        balance = cached_supadata_balance(supadata_key)
+        if balance is None:
+            st.caption("Credit balance unavailable right now. Try Refresh or check the Supadata dashboard.")
+        else:
+            credit_metric, credit_detail = st.columns([1.5, 3.5], vertical_alignment="center")
+            with credit_metric:
+                st.metric("Credits remaining", f"{balance.remaining:,} / {balance.max_credits:,}")
+            with credit_detail:
+                st.caption(f"Plan: {balance.plan} · {balance.used_credits:,} credits used")
+                st.progress(min(1.0, balance.remaining / balance.max_credits)
+                            if balance.max_credits else 0.0)
+        st.caption("Supadata credits are not Gemini tokens. Native caption fallback and "
+                   "video metadata can use credits; pasted transcripts use none.")
 
 result: VideoResult | None = st.session_state.get("current")
 if not result:
