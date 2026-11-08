@@ -64,6 +64,22 @@ If the Supadata metadata request fails, the app also attempts to read the YouTub
 
 The integrity dashboard displays the independently reported duration, last subtitle endpoint, count and size of long gaps, and a colored timeline. Green represents timed caption intervals, amber represents gaps of at least 15 seconds, and red indicates potentially uncovered video beginnings/endings. Click the timestamped intervals under **Inspect suspected gaps and technical details** to verify them in the original video. Silence, music and inaccurate subtitles can yield false alarms; a clean timeline is **not proof of word-for-word completeness**.
 
+### Supadata credit balance
+
+When `SUPADATA_API_KEY` is configured in **private Streamlit secrets**, the analysis page
+shows **remaining credits**, the current provider-reported plan, usage, and a progress
+bar. Use **Refresh** for an immediate read-only update. The balance automatically
+refreshes after a YouTube analysis and is cached for up to 90 seconds otherwise,
+to avoid making unnecessary API requests.
+
+This uses the Supadata **GET /v1/me** account endpoint (no new service or dependency).
+It displays the provider's reported balance rather than assuming that every free
+plan includes a fixed quota. Credits are **not** Gemini tokens. Supadata native
+caption retrieval and video metadata can consume credits; pasted transcripts do
+not. Video metadata may consume a credit even if captions came directly from
+YouTube. Account-status errors do not block the rest of the application. The API
+key is never shown in the interface or committed to GitHub.
+
 ### Costs, quotas and privacy
 
 - **Application hosting:** free within Community Cloud resource restrictions; cold starts/limited uptime possible. Not a guaranteed always-on production service.
