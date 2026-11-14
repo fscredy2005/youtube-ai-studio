@@ -17,6 +17,7 @@ from studio.chapters import suggested_chapters
 from studio.integrity import check_integrity, parse_video_duration
 from studio.credits import fetch_supadata_balance, parse_reset_date, next_expected_monthly_reset
 from studio.export import transcript_txt, transcript_srt, report_markdown, report_pdf
+from studio.notion_export import summary_markdown, summary_csv
 
 st.set_page_config(page_title="YouTube AI Studio", page_icon="🎬", layout="wide",
                    initial_sidebar_state="expanded")
@@ -439,6 +440,28 @@ with t_summary:
         except Exception:
             st.error("Could not regenerate the summary.")
     st.markdown(result.summary)
+    st.markdown("##### Export this summary to Notion")
+    export_ready = summary_style == result.summary_kind
+    if not export_ready:
+        st.info("Generate the newly selected format first; downloads always use the displayed summary.")
+    notion_slug = re.sub(r"[^A-Za-z0-9_-]+", "-", result.title).strip("-")[:45] or "video"
+    notion_style_slug = re.sub(r"[^a-z0-9_-]+", "-", result.summary_kind.lower()).strip("-")
+    notion_md_col, notion_csv_col = st.columns(2)
+    with notion_md_col:
+        st.download_button(
+            "⬇️ Notion page (.md)", data=summary_markdown(result),
+            file_name=f"{notion_slug}-{notion_style_slug}-summary.md",
+            mime="text/markdown", key="notion-summary-md",
+            disabled=not export_ready, use_container_width=True,
+        )
+    with notion_csv_col:
+        st.download_button(
+            "⬇️ Notion database (.csv)", data=summary_csv(result),
+            file_name=f"{notion_slug}-{notion_style_slug}-summary.csv",
+            mime="text/csv", key="notion-summary-csv",
+            disabled=not export_ready, use_container_width=True,
+        )
+    st.caption("Exports only this summary, without a new AI/API call. Import .md as a Notion page, or .csv as a database. The date is the export date, not the video's publication date.")
     with st.expander("Copy summary as Markdown"):
         st.code(result.summary, language="markdown")
 
