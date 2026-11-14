@@ -19,9 +19,24 @@ A complete, simple Streamlit application for extracting **accessible public YouT
 | Ask questions | Keyword-based source excerpts | Generative grounded Q&A |
 | Suggested timeline | ✅ (not official chapters) | Same |
 | Upload and transcribe own audio/video | ✅ CPU Whisper tiny, may be slow | Same |
-| Exports TXT / SRT / Markdown / PDF | ✅ | ✅ |
+| Exports TXT / SRT / Markdown / PDF + Notion summary MD / CSV | ✅ | ✅ |
 | Session history and side-by-side compare | ✅ (session only) | ✅ |
 | Download YouTube audio/video | Off by default; admin opt-in and authorization required | Same |
+
+## Notion-ready summary exports (no extra AI calls)
+
+After analyzing a video, open **AI Summary**, select one of the five summary formats and
+click **Generate selected format** if you changed formats. Under the displayed summary,
+download either **Notion page (.md)** or **Notion database (.csv)**.
+
+- The Markdown file contains a single summary with the video title, channel, YouTube link
+  (when available), summary style, method and UTC export date. Import it as a Notion page.
+- The CSV file contains one database row with the same details, the full selected summary
+  and timestamps present in that summary. Import it using Notion's CSV import.
+- An unchanged summary is exported as-is. Changing the format disables export until the
+  new summary is generated, preventing a mislabeled file.
+- Neither export includes the full transcript or triggers YouTube, Supadata or Gemini calls.
+  The export date is **not** a video publication date; publication dates are not stored.
 
 ## Simplest deployment: Streamlit Community Cloud (free tier)
 
