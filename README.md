@@ -20,7 +20,8 @@ A complete, simple Streamlit application for extracting **accessible public YouT
 | Suggested timeline | ✅ (not official chapters) | Same |
 | Upload and transcribe own audio/video | ✅ CPU Whisper tiny, may be slow | Same |
 | Exports TXT / SRT / Markdown / PDF + Notion summary MD / CSV | ✅ | ✅ |
-| Session history and side-by-side compare | ✅ (session only) | ✅ |
+| Session history and side-by-side compare | ✅ | ✅ |
+| Optional persistent private GitHub library | ✅, after configuration | ✅, after configuration |
 | Download YouTube audio/video | Off by default; admin opt-in and authorization required | Same |
 
 ## Notion-ready summary exports (no extra AI calls)
@@ -37,6 +38,57 @@ download either **Notion page (.md)** or **Notion database (.csv)**.
   new summary is generated, preventing a mislabeled file.
 - Neither export includes the full transcript or triggers YouTube, Supadata or Gemini calls.
   The export date is **not** a video publication date; publication dates are not stored.
+
+## Permanent My Library (optional, private and no repeat AI calls)
+
+YouTube AI Studio can now preserve each successful analysis (full timed transcript, metadata,
+all generated summary formats, extractive takeaways, Q&A history, optional translated
+captions and reference duration). Caption integrity checks and suggested timeline are
+reconstructed locally from the stored timestamps. **YouTube video/audio files are
+never stored** in this feature.
+
+The archive is opt-in. Without the following secrets, the app behaves as before
+and keeps only the last six analyses in its current Streamlit session.
+
+1. Create a **separate PRIVATE GitHub repository**, for example
+   `YOUR_GITHUB_USERNAME/youtube-ai-studio-history`. Initialize it with a README
+   so it has a default branch. **Do not use this app's public code repository.**
+2. In GitHub, create a **fine-grained personal access token**, restricted to just
+   the private history repository, granting **Contents: Read and write** and
+   **Metadata: Read**. Give the token an expiration date.
+3. In your **Streamlit Community Cloud app → Settings → Secrets**, add
+   (with your own values):
+
+   ```toml
+   HISTORY_REPO = "YOUR_GITHUB_USERNAME/youtube-ai-studio-history"
+   HISTORY_TOKEN = "your-fine-grained-token"
+   HISTORY_PASSWORD = "use-a-unique-long-password"
+   ```
+
+4. Save the Streamlit secrets, relaunch the app and sign in. The app verifies
+   that the target repository is actually PRIVATE before reading or writing.
+   Once all three secrets are configured, **the entire Studio requires the
+   password**, protecting both personal history and existing Gemini/Supadata keys.
+
+The **My Library** expander lets you search by title/channel and reopen an analysis.
+When a previously archived YouTube URL is pasted, the app opens the existing record
+by default, with **zero additional Gemini, Supadata or caption requests**. To refresh
+the video, explicitly check *Re-analyze saved URLs*. New summaries and Q&A responses
+are saved after creation; existing summary formats are restored without regenerating.
+Use *Save updated analysis* after manually changing the video's reference duration.
+
+Each analysis is a JSON file in `analyses/<id>.json`, with a small `index.json`
+for the library list. A file is overwritten by ID rather than creating duplicates.
+Data can be backed up by downloading the private repository as a ZIP in GitHub.
+This is intended for modest, text-only personal libraries, not large video archives;
+each JSON record has a conservative 900 KB limit. GitHub's API is rate-limited.
+If a save fails, the current browser session retains the analysis; retry saving.
+Previous analyses from expired browser sessions cannot be recovered automatically.
+
+**Security:** Keep the token and password exclusively in Streamlit Secrets, never in
+commits, issues, screenshots, public repositories or exported reports. A private repo
+alone is insufficient when the Streamlit URL is public, so the password gate is required.
+Streamlit passwords are simple shared-secret access control, not multi-user accounts.
 
 ## Simplest deployment: Streamlit Community Cloud (free tier)
 
@@ -125,7 +177,7 @@ dashboard again if your subscription changes or the renewal date differs.
 - **Free summarization:** open-source, deterministic extractive implementation; no inference API cost. No translation.
 - **Whisper audio transcription:** first invocation downloads an open-source small model; downloads/compute are subject to network and hosting limits. Restricted to 50MB and 30 minutes per file. May fail on a small free instance.
 - **Gemini:** optional, managed by Google; free quotas and prices depend on current model, region, and account. Check [official Gemini rate limits](https://ai.google.dev/gemini-api/docs/rate-limits). Using a paid-key account can incur charges.
-- **Privacy:** no server database. Transcripts and summaries are kept in Streamlit's browser session and may be forwarded to Google if Gemini is enabled. Streamlit and hosting logs may still record application events. If a public app uses your server-side Gemini key, visitors can consume your API quota. Restrict access if you want the key only for yourself.
+- **Privacy:** by default there is no permanent server database; after enabling private GitHub history, transcripts and summaries are also stored in a private repository. Data may be forwarded to Google if Gemini is enabled. Streamlit and hosting logs may still record application events. If a public app uses your server-side Gemini key, visitors can consume your API quota. Restrict access if you want the key only for yourself.
 
 ### Running locally (optional, for developers)
 
@@ -184,7 +236,7 @@ The offline tests use mocks and synthetic transcripts; live YouTube/Google calls
 - User URLs can only resolve to validated YouTube video IDs (no arbitrary fetch endpoint).
 - API keys are read from environment or Streamlit secrets, never source code or visible UI text.
 - 50MB upload/download limits, 30-minute media limit, 180,000-character transcript ceiling.
-- Temporary audio/download files are deleted. No permanent server database.
+- Temporary audio/download files are deleted. No permanent database unless the optional private GitHub history is enabled.
 - Generative model prompts treat video transcript content as data, not operational instructions.
 - Free fallback remains usable when external AI providers fail.
 
