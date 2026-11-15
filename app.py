@@ -261,7 +261,46 @@ with st.sidebar:
         st.session_state.pop("translation", None)
         st.rerun()
     st.divider()
-    st.caption("🔒 Sessions aren't saved to a database. Processing happens on the hosting server. Avoid submitting confidential material to shared deployments.")
+    if archive:
+        st.caption("🔒 Saved analyses live in your private GitHub history repository. Clearing a session does not delete them.")
+    else:
+        st.caption("🔒 Session only: enable private history to keep analyses after closing the browser.")
+
+if archive is not None:
+    with st.expander("📚 My Library · permanent video history", expanded=False):
+        st.caption("Search and reopen analyses without running Gemini or Supadata.")
+        try:
+            if "library_index" not in st.session_state:
+                st.session_state.library_index = archive.list_index()
+            saved_entries = st.session_state.library_index
+        except HistoryError as exc:
+            saved_entries = []
+            st.error(f"Unable to load history: {exc}")
+        query = st.text_input("Search saved videos", key="library_search",
+                              placeholder="Title or channel").strip().casefold()
+        matches = [item for item in saved_entries
+                   if query in (item.get("title", "") + " " + item.get("channel", "")).casefold()]
+        st.caption(f"{len(matches)} saved analyses matching your search")
+        if matches:
+            labels = {item["id"]: f'{item.get("title", "Untitled")} · {item.get("channel", "")}'
+                      for item in matches}
+            chosen_id = st.selectbox("Select an analysis", list(labels),
+                                     format_func=lambda k: labels[k], key="library_selected")
+            if st.button("📖 Open saved analysis", key="library_open", type="primary"):
+                try:
+                    saved_record = archive.load(chosen_id)
+                    if saved_record is None:
+                        st.error("This saved analysis could not be found.")
+                    else:
+                        load_saved_record(saved_record)
+                        st.rerun()
+                except HistoryError as exc:
+                    st.error(str(exc))
+        if st.button("↻ Refresh library list", key="library_refresh"):
+            st.session_state.pop("library_index", None)
+            st.rerun()
+else:
+    st.caption("📚 Permanent library is optional; configure private HISTORY_* secrets to enable it.")
 
 st.markdown("#### 01  ·  Analyze a YouTube video")
 left, right = st.columns([4.5, 1.2], vertical_alignment="bottom")
@@ -287,25 +326,38 @@ with st.expander("More options · caption language and upload alternatives", exp
         paste_clicked = st.button("📄 Analyze pasted transcript", use_container_width=True,
                                   disabled=len(raw_paste.strip()) < 40)
 
+if archive:
+    st.checkbox("Re-analyze saved URLs instead of opening existing history",
+                key="force_refresh_history", value=False,
+                help="Uncheck to reopen a saved video without using caption or AI credits.")
+
 if analyze_clicked:
     if not link.strip():
         st.warning("Paste a YouTube URL in the field above.")
     else:
         try:
-            with st.status("Analyzing video…", expanded=True) as status:
-                st.write("Checking the link and fetching public captions…")
-                result = analyze_youtube(link, pref, read_setting("SUPADATA_API_KEY"))
-                st.write(f"Loaded {len(result.segments)} transcript passages. Creating your summary…")
-                set_result(result, chosen_style, target_language)
-                status.update(label="Analysis complete", state="complete")
-        except (VideoInputError, CaptionsUnavailable, ValueError) as exc:
+            saved_record = None
+            if archive and not st.session_state.get("force_refresh_history", False):
+                from studio.youtube import parse_video_id
+                saved_id = parse_video_id(link)
+                if saved_id:
+                    saved_record = archive.load(saved_id)
+            if saved_record is not None:
+                load_saved_record(saved_record)
+                st.success("Opened existing analysis from My Library — no new AI or caption calls.")
+            else:
+                with st.status("Analyzing video…", expanded=True) as status:
+                    st.write("Checking the link and fetching public captions…")
+                    result = analyze_youtube(link, pref, read_setting("SUPADATA_API_KEY"))
+                    st.write(f"Loaded {len(result.segments)} transcript passages. Creating your summary…")
+                    set_result(result, chosen_style, target_language)
+                    status.update(label="Analysis complete", state="complete")
+                if read_setting("SUPADATA_API_KEY"):
+                    cached_supadata_balance.clear()
+        except (VideoInputError, CaptionsUnavailable, ValueError, HistoryError) as exc:
             st.error(str(exc))
         except Exception:
-            st.error("The video could not be analyzed. Check the URL or try an uploaded transcript.")
-        finally:
-            # A successful analysis can spend Supadata transcript and/or metadata credits.
-            if read_setting("SUPADATA_API_KEY"):
-                cached_supadata_balance.clear()
+            st.error("The video could not be analyzed or reopened. Check the URL and configuration.")
 
 if upload_clicked:
     try:
@@ -398,6 +450,15 @@ if not result:
 
 st.divider()
 st.markdown("#### 02  ·  Your results")
+if archive:
+    if st.button("💾 Save updated analysis to My Library", key="history_manual_save"):
+        save_current()
+    if st.session_state.get("history_save_error"):
+        st.warning("Analysis is available in this session but archive save failed: "
+                   + st.session_state.history_save_error)
+    elif st.session_state.get("history_saved"):
+        st.caption("✅ Archive saved in private GitHub storage.")
+
 info, details = st.columns([1.2, 3.8], vertical_alignment="center")
 with info:
     if result.thumbnail:
