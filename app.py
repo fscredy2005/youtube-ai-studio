@@ -590,19 +590,31 @@ with t_summary:
     summary_style = st.selectbox("Summary style", STYLES,
                                  index=STYLES.index(result.summary_kind) if result.summary_kind in STYLES else 0,
                                  key="result_summary_style")
-    if st.button("↻ Generate selected format", key="regen_summary"):
+    existing_variant = st.session_state.get("summary_variants", {}).get(summary_style)
+    summary_action = ("↻ Open previously saved format (free)" if existing_variant
+                      else "↻ Generate selected format")
+    if st.button(summary_action, key="regen_summary"):
         try:
-            with st.spinner("Creating summary…"):
-                result.summary, result.summary_engine, result.summary_note = generate_summary(
-                    result.segments, summary_style, result.video_id, target_language,
-                    read_setting("GEMINI_API_KEY"), read_setting("GEMINI_MODEL", "gemini-2.5-flash-lite"))
-                result.summary_kind = summary_style
-                st.session_state.current = result
-                key = result.video_id or f"upload:{result.title}"
-                if key in st.session_state.get("history", {}):
-                    st.session_state.history[key]["result"] = deepcopy(result)
+            if existing_variant:
+                result.summary = existing_variant["text"]
+                result.summary_engine = existing_variant["engine"]
+                result.summary_note = existing_variant["note"]
+            else:
+                with st.spinner("Creating summary…"):
+                    result.summary, result.summary_engine, result.summary_note = generate_summary(
+                        result.segments, summary_style, result.video_id, target_language,
+                        read_setting("GEMINI_API_KEY"), read_setting("GEMINI_MODEL", "gemini-2.5-flash-lite"))
+            result.summary_kind = summary_style
+            st.session_state.current = result
+            st.session_state.setdefault("summary_variants", {})[summary_style] = {
+                "text": result.summary, "engine": result.summary_engine, "note": result.summary_note}
+            key = record_id(result)
+            if key in st.session_state.get("history", {}):
+                st.session_state.history[key]["result"] = deepcopy(result)
+                st.session_state.history[key]["variants"] = deepcopy(st.session_state.summary_variants)
+            save_current()
         except Exception:
-            st.error("Could not regenerate the summary.")
+            st.error("Could not load or regenerate the summary.")
     st.markdown(result.summary)
     st.markdown("##### Export this summary to Notion")
     export_ready = summary_style == result.summary_kind
@@ -653,6 +665,7 @@ with t_transcript:
                 with st.spinner("Fetching translation from YouTube…"):
                     translated = retrieve_translation(result.video_id, result.language, translate_to)
                     st.session_state.translation = (result.video_id, translate_to, translated)
+                    save_current()
             except CaptionsUnavailable as exc:
                 st.warning(str(exc))
         current_translation = st.session_state.get("translation")
@@ -741,8 +754,18 @@ with t_ask:
         except Exception:
             st.session_state.qa_answer = find_related(result.segments, user_question, result.video_id)
             st.warning("Generative Q&A unavailable; showing matching transcript passages instead.")
+        st.session_state.setdefault("qa_items", []).append({
+            "question": user_question.strip(), "answer": st.session_state.qa_answer})
+        save_current()
     if st.session_state.get("qa_answer"):
         st.markdown(st.session_state.qa_answer)
+    previous = st.session_state.get("qa_items", [])
+    if previous:
+        with st.expander(f"💬 Saved question history ({len(previous)})"):
+            for entry in previous:
+                st.markdown("**Q:** " + entry.get("question", ""))
+                st.markdown(entry.get("answer", ""))
+                st.divider()
     st.caption("Without Gemini, this is a transcript passage search, not a generative question-answering model.")
 
 with t_compare:
