@@ -90,7 +90,9 @@ class GitHubHistory:
         self._verified = False
 
     def _request(self, path: str, method: str = "GET", data: dict | None = None):
-        url = f"https://api.github.com/repos/{self.repo}/{path}"
+        # GitHub REST repo metadata rejects a trailing slash (404), while
+        # file endpoints must still include their path separator.
+        url = f"https://api.github.com/repos/{self.repo}" + (f"/{path}" if path else "")
         headers = {
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {self.token}",
