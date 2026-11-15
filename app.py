@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from copy import deepcopy
+from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -18,6 +19,8 @@ from studio.integrity import check_integrity, parse_video_duration
 from studio.credits import fetch_supadata_balance, parse_reset_date, next_expected_monthly_reset
 from studio.export import transcript_txt, transcript_srt, report_markdown, report_pdf
 from studio.notion_export import summary_markdown, summary_csv
+from studio.history import (GitHubHistory, HistoryError, make_record,
+                            restore_record, record_id, verify_password)
 
 st.set_page_config(page_title="YouTube AI Studio", page_icon="🎬", layout="wide",
                    initial_sidebar_state="expanded")
@@ -52,6 +55,38 @@ def read_setting(name: str, default: str = "") -> str:
         return default
 
 
+# Archive access is opt-in. When configured, gate the WHOLE public app to
+# protect saved analyses and existing AI/API quotas.
+history_repo = read_setting("HISTORY_REPO")
+history_token = read_setting("HISTORY_TOKEN")
+history_password = read_setting("HISTORY_PASSWORD")
+archive = None
+if any((history_repo, history_token, history_password)):
+    if not all((history_repo, history_token, history_password)):
+        st.error("History setup incomplete: configure HISTORY_REPO, HISTORY_TOKEN and HISTORY_PASSWORD.")
+        st.stop()
+    if not st.session_state.get("history_authorized", False):
+        st.markdown("### 🔒 Private YouTube AI Studio")
+        supplied = st.text_input("Studio password", type="password", key="history_login")
+        if st.button("Unlock Studio", type="primary"):
+            if verify_password(supplied, history_password):
+                st.session_state.history_authorized = True
+                st.session_state.pop("history_login", None)
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+        st.stop()
+    try:
+        archive = st.session_state.get("history_store")
+        if archive is None or archive.repo != history_repo or archive.token != history_token:
+            archive = GitHubHistory(history_repo, history_token)
+            archive.verify_private()
+            st.session_state.history_store = archive
+    except HistoryError as exc:
+        st.error(f"Private library unavailable: {exc}")
+        st.stop()
+
+
 @st.cache_data(ttl=90, show_spinner=False)
 def cached_supadata_balance(api_key: str):
     """Short-lived cache avoids fetching account status on every Streamlit rerun."""
@@ -61,6 +96,38 @@ def cached_supadata_balance(api_key: str):
 def language_label(code: str) -> str:
     return {"en": "English", "fr": "French", "es": "Spanish", "de": "German",
             "it": "Italian", "pt": "Portuguese"}.get(code.split("-")[0].lower(), code)
+
+
+def _translation_snapshot() -> dict | None:
+    entry = st.session_state.get("translation")
+    if not entry:
+        return None
+    video_id, target, segments = entry
+    return {"video_id": video_id, "target": target,
+            "segments": [asdict(s) for s in segments]}
+
+
+def save_current() -> None:
+    """Persist existing results only. No AI or caption calls."""
+    if archive is None or not st.session_state.get("current"):
+        return
+    result = st.session_state.current
+    duration_key = "reference_video_duration_" + (result.video_id or "uploaded")
+    record = make_record(
+        result, takeaways=st.session_state.get("takeaways", ""),
+        variants=st.session_state.get("summary_variants", {}),
+        questions=st.session_state.get("qa_items", []),
+        translation=_translation_snapshot(),
+        manual_duration=st.session_state.get(duration_key, ""),
+    )
+    try:
+        archive.save(record)
+        st.session_state.pop("library_index", None)
+        st.session_state.pop("history_save_error", None)
+        st.session_state.history_saved = True
+    except HistoryError as exc:
+        st.session_state.history_saved = False
+        st.session_state.history_save_error = str(exc)
 
 
 def set_result(result: VideoResult, style: str, target_lang: str) -> None:
@@ -76,13 +143,19 @@ def set_result(result: VideoResult, style: str, target_lang: str) -> None:
     st.session_state.current = result
     st.session_state.takeaways = extractive(result.segments, "Key takeaways", result.video_id)
     st.session_state.qa_answer = ""
+    st.session_state.qa_items = []
+    st.session_state.summary_variants = {
+        style: {"text": result.summary, "engine": result.summary_engine, "note": result.summary_note}}
     st.session_state.pop("media_download", None)
     st.session_state.pop("translation", None)
+    st.session_state["result_summary_style"] = style
     history = st.session_state.setdefault("history", {})
-    name = result.video_id or f"upload:{result.title}"
-    history[name] = {"result": deepcopy(result), "takeaways": st.session_state.takeaways}
+    name = record_id(result)
+    history[name] = {"result": deepcopy(result), "takeaways": st.session_state.takeaways,
+                     "variants": deepcopy(st.session_state.summary_variants), "questions": []}
     while len(history) > 6:
         history.pop(next(iter(history)))
+    save_current()
 
 
 def make_pasted_result(text: str, title: str, video_url: str = "") -> VideoResult:
@@ -116,9 +189,39 @@ def make_pasted_result(text: str, title: str, video_url: str = "") -> VideoResul
 def go_to_result(item: dict) -> None:
     st.session_state.current = deepcopy(item["result"])
     st.session_state.takeaways = item["takeaways"]
+    st.session_state.qa_items = deepcopy(item.get("questions") or [])
     st.session_state.qa_answer = ""
+    video = st.session_state.current
+    st.session_state.summary_variants = deepcopy(item.get("variants") or {
+        video.summary_kind: {"text": video.summary, "engine": video.summary_engine,
+                             "note": video.summary_note}})
+    st.session_state["result_summary_style"] = video.summary_kind
     st.session_state.pop("media_download", None)
     st.session_state.pop("translation", None)
+    translated = item.get("translation")
+    if isinstance(translated, dict):
+        try:
+            st.session_state.translation = (
+                translated["video_id"], translated["target"],
+                [Segment(**s) for s in translated["segments"]])
+        except (KeyError, TypeError, ValueError):
+            pass
+    duration = item.get("manual_duration")
+    if duration:
+        st.session_state["reference_video_duration_" + (video.video_id or "uploaded")] = duration
+
+
+def load_saved_record(record: dict) -> None:
+    """Restores local session data without provider or AI calls."""
+    video, extra = restore_record(record)
+    item = {"result": video, **extra}
+    go_to_result(item)
+    history = st.session_state.setdefault("history", {})
+    history[record_id(video)] = deepcopy(item)
+    while len(history) > 6:
+        history.pop(next(iter(history)))
+    st.session_state.history_saved = True
+    st.session_state.pop("history_save_error", None)
 
 
 st.markdown('''<div class="hero"><div class="eyebrow">YOUR VIDEO KNOWLEDGE WORKSPACE</div>
