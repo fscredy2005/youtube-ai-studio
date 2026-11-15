@@ -20,7 +20,7 @@ from studio.credits import fetch_supadata_balance, parse_reset_date, next_expect
 from studio.export import transcript_txt, transcript_srt, report_markdown, report_pdf
 from studio.notion_export import summary_markdown, summary_csv
 from studio.history import (GitHubHistory, HistoryError, make_record,
-                            restore_record, record_id, verify_password)
+                            restore_record, record_id, verify_password, summary_slot)
 
 st.set_page_config(page_title="YouTube AI Studio", page_icon="🎬", layout="wide",
                    initial_sidebar_state="expanded")
@@ -119,6 +119,7 @@ def save_current() -> None:
         questions=st.session_state.get("qa_items", []),
         translation=_translation_snapshot(),
         manual_duration=st.session_state.get(duration_key, ""),
+        summary_language=st.session_state.get("result_summary_language", "English"),
     )
     try:
         archive.save(record)
@@ -144,8 +145,10 @@ def set_result(result: VideoResult, style: str, target_lang: str) -> None:
     st.session_state.takeaways = extractive(result.segments, "Key takeaways", result.video_id)
     st.session_state.qa_answer = ""
     st.session_state.qa_items = []
+    st.session_state.result_summary_language = target_lang
     st.session_state.summary_variants = {
-        style: {"text": result.summary, "engine": result.summary_engine, "note": result.summary_note}}
+        summary_slot(style, target_lang):
+            {"text": result.summary, "engine": result.summary_engine, "note": result.summary_note}}
     st.session_state.pop("media_download", None)
     st.session_state.pop("translation", None)
     st.session_state["result_summary_style"] = style
@@ -192,9 +195,11 @@ def go_to_result(item: dict) -> None:
     st.session_state.qa_items = deepcopy(item.get("questions") or [])
     st.session_state.qa_answer = ""
     video = st.session_state.current
+    st.session_state.result_summary_language = item.get("summary_language", "English")
     st.session_state.summary_variants = deepcopy(item.get("variants") or {
-        video.summary_kind: {"text": video.summary, "engine": video.summary_engine,
-                             "note": video.summary_note}})
+        summary_slot(video.summary_kind, st.session_state.result_summary_language):
+            {"text": video.summary, "engine": video.summary_engine,
+             "note": video.summary_note}})
     st.session_state["result_summary_style"] = video.summary_kind
     st.session_state.pop("media_download", None)
     st.session_state.pop("translation", None)
@@ -590,7 +595,8 @@ with t_summary:
     summary_style = st.selectbox("Summary style", STYLES,
                                  index=STYLES.index(result.summary_kind) if result.summary_kind in STYLES else 0,
                                  key="result_summary_style")
-    existing_variant = st.session_state.get("summary_variants", {}).get(summary_style)
+    existing_variant = st.session_state.get("summary_variants", {}).get(
+        summary_slot(summary_style, target_language))
     summary_action = ("↻ Open previously saved format (free)" if existing_variant
                       else "↻ Generate selected format")
     if st.button(summary_action, key="regen_summary"):
@@ -606,7 +612,9 @@ with t_summary:
                         read_setting("GEMINI_API_KEY"), read_setting("GEMINI_MODEL", "gemini-2.5-flash-lite"))
             result.summary_kind = summary_style
             st.session_state.current = result
-            st.session_state.setdefault("summary_variants", {})[summary_style] = {
+            st.session_state.result_summary_language = target_language
+            st.session_state.setdefault("summary_variants", {})[
+                summary_slot(summary_style, target_language)] = {
                 "text": result.summary, "engine": result.summary_engine, "note": result.summary_note}
             key = record_id(result)
             if key in st.session_state.get("history", {}):
