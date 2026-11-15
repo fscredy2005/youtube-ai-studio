@@ -1,0 +1,28 @@
+name: Persistent Library offline checks
+
+on:
+  pull_request:
+    paths:
+      - "app.py"
+      - "studio/history.py"
+      - "studio/models.py"
+      - "tests/test_history.py"
+      - ".github/workflows/history-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  history:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install lightweight test dependency
+        run: python -m pip install pytest
+      - name: Check Python syntax
+        run: python -m compileall -q app.py studio
+      - name: Run mocked offline history tests
+        run: python -m pytest -q tests/test_history.py

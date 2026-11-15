@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from copy import deepcopy
+from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -18,6 +19,8 @@ from studio.integrity import check_integrity, parse_video_duration
 from studio.credits import fetch_supadata_balance, parse_reset_date, next_expected_monthly_reset
 from studio.export import transcript_txt, transcript_srt, report_markdown, report_pdf
 from studio.notion_export import summary_markdown, summary_csv
+from studio.history import (GitHubHistory, HistoryError, make_record,
+                            restore_record, record_id, verify_password, summary_slot)
 
 st.set_page_config(page_title="YouTube AI Studio", page_icon="🎬", layout="wide",
                    initial_sidebar_state="expanded")
@@ -52,6 +55,38 @@ def read_setting(name: str, default: str = "") -> str:
         return default
 
 
+# Archive access is opt-in. When configured, gate the WHOLE public app to
+# protect saved analyses and existing AI/API quotas.
+history_repo = read_setting("HISTORY_REPO")
+history_token = read_setting("HISTORY_TOKEN")
+history_password = read_setting("HISTORY_PASSWORD")
+archive = None
+if any((history_repo, history_token, history_password)):
+    if not all((history_repo, history_token, history_password)):
+        st.error("History setup incomplete: configure HISTORY_REPO, HISTORY_TOKEN and HISTORY_PASSWORD.")
+        st.stop()
+    if not st.session_state.get("history_authorized", False):
+        st.markdown("### 🔒 Private YouTube AI Studio")
+        supplied = st.text_input("Studio password", type="password", key="history_login")
+        if st.button("Unlock Studio", type="primary"):
+            if verify_password(supplied, history_password):
+                st.session_state.history_authorized = True
+                st.session_state.pop("history_login", None)
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+        st.stop()
+    try:
+        archive = st.session_state.get("history_store")
+        if archive is None or archive.repo != history_repo or archive.token != history_token:
+            archive = GitHubHistory(history_repo, history_token)
+            archive.verify_private()
+            st.session_state.history_store = archive
+    except HistoryError as exc:
+        st.error(f"Private library unavailable: {exc}")
+        st.stop()
+
+
 @st.cache_data(ttl=90, show_spinner=False)
 def cached_supadata_balance(api_key: str):
     """Short-lived cache avoids fetching account status on every Streamlit rerun."""
@@ -61,6 +96,55 @@ def cached_supadata_balance(api_key: str):
 def language_label(code: str) -> str:
     return {"en": "English", "fr": "French", "es": "Spanish", "de": "German",
             "it": "Italian", "pt": "Portuguese"}.get(code.split("-")[0].lower(), code)
+
+
+def _translation_snapshot() -> dict | None:
+    entry = st.session_state.get("translation")
+    if not entry:
+        return None
+    video_id, target, segments = entry
+    return {"video_id": video_id, "target": target,
+            "segments": [asdict(s) for s in segments]}
+
+
+def save_current() -> None:
+    """Persist existing results only. No AI or caption calls."""
+    if archive is None or not st.session_state.get("current"):
+        return
+    result = st.session_state.current
+    duration_key = "reference_video_duration_" + (result.video_id or "uploaded")
+    record = make_record(
+        result, takeaways=st.session_state.get("takeaways", ""),
+        variants=st.session_state.get("summary_variants", {}),
+        questions=st.session_state.get("qa_items", []),
+        translation=_translation_snapshot(),
+        manual_duration=st.session_state.get(duration_key, ""),
+        summary_language=st.session_state.get("result_summary_language", "English"),
+    )
+    # Keep the six-item session history consistent with the durable archive.
+    session_items = st.session_state.setdefault("history", {})
+    key = record_id(result)
+    if key in session_items:
+        session_items[key] = {
+            "result": deepcopy(result), "takeaways": record["takeaways"],
+            "variants": deepcopy(record["variants"]),
+            "questions": deepcopy(record["questions"]),
+            "translation": deepcopy(record["translation"]),
+            "manual_duration": record["manual_duration"],
+            "summary_language": record["summary_language"],
+        }
+    try:
+        archive.save(record)
+        st.session_state.pop("library_index", None)
+        st.session_state.pop("history_save_error", None)
+        st.session_state.history_saved = True
+        if key in session_items:
+            session_items[key]["archive_saved"] = True
+    except HistoryError as exc:
+        st.session_state.history_saved = False
+        if key in session_items:
+            session_items[key]["archive_saved"] = False
+        st.session_state.history_save_error = str(exc)
 
 
 def set_result(result: VideoResult, style: str, target_lang: str) -> None:
@@ -76,13 +160,21 @@ def set_result(result: VideoResult, style: str, target_lang: str) -> None:
     st.session_state.current = result
     st.session_state.takeaways = extractive(result.segments, "Key takeaways", result.video_id)
     st.session_state.qa_answer = ""
+    st.session_state.qa_items = []
+    st.session_state.result_summary_language = target_lang
+    st.session_state.summary_variants = {
+        summary_slot(style, target_lang):
+            {"text": result.summary, "engine": result.summary_engine, "note": result.summary_note}}
     st.session_state.pop("media_download", None)
     st.session_state.pop("translation", None)
+    st.session_state["result_summary_style"] = style
     history = st.session_state.setdefault("history", {})
-    name = result.video_id or f"upload:{result.title}"
-    history[name] = {"result": deepcopy(result), "takeaways": st.session_state.takeaways}
+    name = record_id(result)
+    history[name] = {"result": deepcopy(result), "takeaways": st.session_state.takeaways,
+                     "variants": deepcopy(st.session_state.summary_variants), "questions": []}
     while len(history) > 6:
         history.pop(next(iter(history)))
+    save_current()
 
 
 def make_pasted_result(text: str, title: str, video_url: str = "") -> VideoResult:
@@ -115,10 +207,44 @@ def make_pasted_result(text: str, title: str, video_url: str = "") -> VideoResul
 
 def go_to_result(item: dict) -> None:
     st.session_state.current = deepcopy(item["result"])
+    st.session_state.history_saved = bool(item.get("archive_saved", False))
+    st.session_state.pop("history_save_error", None)
     st.session_state.takeaways = item["takeaways"]
+    st.session_state.qa_items = deepcopy(item.get("questions") or [])
     st.session_state.qa_answer = ""
+    video = st.session_state.current
+    st.session_state.result_summary_language = item.get("summary_language", "English")
+    st.session_state.summary_variants = deepcopy(item.get("variants") or {
+        summary_slot(video.summary_kind, st.session_state.result_summary_language):
+            {"text": video.summary, "engine": video.summary_engine,
+             "note": video.summary_note}})
+    st.session_state["result_summary_style"] = video.summary_kind
     st.session_state.pop("media_download", None)
     st.session_state.pop("translation", None)
+    translated = item.get("translation")
+    if isinstance(translated, dict):
+        try:
+            st.session_state.translation = (
+                translated["video_id"], translated["target"],
+                [Segment(**s) for s in translated["segments"]])
+        except (KeyError, TypeError, ValueError):
+            pass
+    duration = item.get("manual_duration")
+    if duration:
+        st.session_state["reference_video_duration_" + (video.video_id or "uploaded")] = duration
+
+
+def load_saved_record(record: dict) -> None:
+    """Restores local session data without provider or AI calls."""
+    video, extra = restore_record(record)
+    item = {"result": video, "archive_saved": True, **extra}
+    go_to_result(item)
+    history = st.session_state.setdefault("history", {})
+    history[record_id(video)] = deepcopy(item)
+    while len(history) > 6:
+        history.pop(next(iter(history)))
+    st.session_state.history_saved = True
+    st.session_state.pop("history_save_error", None)
 
 
 st.markdown('''<div class="hero"><div class="eyebrow">YOUR VIDEO KNOWLEDGE WORKSPACE</div>
@@ -158,7 +284,46 @@ with st.sidebar:
         st.session_state.pop("translation", None)
         st.rerun()
     st.divider()
-    st.caption("🔒 Sessions aren't saved to a database. Processing happens on the hosting server. Avoid submitting confidential material to shared deployments.")
+    if archive:
+        st.caption("🔒 Saved analyses live in your private GitHub history repository. Clearing a session does not delete them.")
+    else:
+        st.caption("🔒 Session only: enable private history to keep analyses after closing the browser.")
+
+if archive is not None:
+    with st.expander("📚 My Library · permanent video history", expanded=False):
+        st.caption("Search and reopen analyses without running Gemini or Supadata.")
+        try:
+            if "library_index" not in st.session_state:
+                st.session_state.library_index = archive.list_index()
+            saved_entries = st.session_state.library_index
+        except HistoryError as exc:
+            saved_entries = []
+            st.error(f"Unable to load history: {exc}")
+        query = st.text_input("Search saved videos", key="library_search",
+                              placeholder="Title or channel").strip().casefold()
+        matches = [item for item in saved_entries
+                   if query in (item.get("title", "") + " " + item.get("channel", "")).casefold()]
+        st.caption(f"{len(matches)} saved analyses matching your search")
+        if matches:
+            labels = {item["id"]: f'{item.get("title", "Untitled")} · {item.get("channel", "")}'
+                      for item in matches}
+            chosen_id = st.selectbox("Select an analysis", list(labels),
+                                     format_func=lambda k: labels[k], key="library_selected")
+            if st.button("📖 Open saved analysis", key="library_open", type="primary"):
+                try:
+                    saved_record = archive.load(chosen_id)
+                    if saved_record is None:
+                        st.error("This saved analysis could not be found.")
+                    else:
+                        load_saved_record(saved_record)
+                        st.rerun()
+                except HistoryError as exc:
+                    st.error(str(exc))
+        if st.button("↻ Refresh library list", key="library_refresh"):
+            st.session_state.pop("library_index", None)
+            st.rerun()
+else:
+    st.caption("📚 Permanent library is optional; configure private HISTORY_* secrets to enable it.")
 
 st.markdown("#### 01  ·  Analyze a YouTube video")
 left, right = st.columns([4.5, 1.2], vertical_alignment="bottom")
@@ -184,25 +349,38 @@ with st.expander("More options · caption language and upload alternatives", exp
         paste_clicked = st.button("📄 Analyze pasted transcript", use_container_width=True,
                                   disabled=len(raw_paste.strip()) < 40)
 
+if archive:
+    st.checkbox("Re-analyze saved URLs instead of opening existing history",
+                key="force_refresh_history", value=False,
+                help="Uncheck to reopen a saved video without using caption or AI credits.")
+
 if analyze_clicked:
     if not link.strip():
         st.warning("Paste a YouTube URL in the field above.")
     else:
         try:
-            with st.status("Analyzing video…", expanded=True) as status:
-                st.write("Checking the link and fetching public captions…")
-                result = analyze_youtube(link, pref, read_setting("SUPADATA_API_KEY"))
-                st.write(f"Loaded {len(result.segments)} transcript passages. Creating your summary…")
-                set_result(result, chosen_style, target_language)
-                status.update(label="Analysis complete", state="complete")
-        except (VideoInputError, CaptionsUnavailable, ValueError) as exc:
+            saved_record = None
+            if archive and not st.session_state.get("force_refresh_history", False):
+                from studio.youtube import parse_video_id
+                saved_id = parse_video_id(link)
+                if saved_id:
+                    saved_record = archive.load(saved_id)
+            if saved_record is not None:
+                load_saved_record(saved_record)
+                st.success("Opened existing analysis from My Library — no new AI or caption calls.")
+            else:
+                with st.status("Analyzing video…", expanded=True) as status:
+                    st.write("Checking the link and fetching public captions…")
+                    result = analyze_youtube(link, pref, read_setting("SUPADATA_API_KEY"))
+                    st.write(f"Loaded {len(result.segments)} transcript passages. Creating your summary…")
+                    set_result(result, chosen_style, target_language)
+                    status.update(label="Analysis complete", state="complete")
+                if read_setting("SUPADATA_API_KEY"):
+                    cached_supadata_balance.clear()
+        except (VideoInputError, CaptionsUnavailable, ValueError, HistoryError) as exc:
             st.error(str(exc))
         except Exception:
-            st.error("The video could not be analyzed. Check the URL or try an uploaded transcript.")
-        finally:
-            # A successful analysis can spend Supadata transcript and/or metadata credits.
-            if read_setting("SUPADATA_API_KEY"):
-                cached_supadata_balance.clear()
+            st.error("The video could not be analyzed or reopened. Check the URL and configuration.")
 
 if upload_clicked:
     try:
@@ -295,6 +473,15 @@ if not result:
 
 st.divider()
 st.markdown("#### 02  ·  Your results")
+if archive:
+    if st.button("💾 Save updated analysis to My Library", key="history_manual_save"):
+        save_current()
+    if st.session_state.get("history_save_error"):
+        st.warning("Analysis is available in this session but archive save failed: "
+                   + st.session_state.history_save_error)
+    elif st.session_state.get("history_saved"):
+        st.caption("✅ Archive saved in private GitHub storage.")
+
 info, details = st.columns([1.2, 3.8], vertical_alignment="center")
 with info:
     if result.thumbnail:
@@ -426,19 +613,34 @@ with t_summary:
     summary_style = st.selectbox("Summary style", STYLES,
                                  index=STYLES.index(result.summary_kind) if result.summary_kind in STYLES else 0,
                                  key="result_summary_style")
-    if st.button("↻ Generate selected format", key="regen_summary"):
+    existing_variant = st.session_state.get("summary_variants", {}).get(
+        summary_slot(summary_style, target_language))
+    summary_action = ("↻ Open previously saved format (free)" if existing_variant
+                      else "↻ Generate selected format")
+    if st.button(summary_action, key="regen_summary"):
         try:
-            with st.spinner("Creating summary…"):
-                result.summary, result.summary_engine, result.summary_note = generate_summary(
-                    result.segments, summary_style, result.video_id, target_language,
-                    read_setting("GEMINI_API_KEY"), read_setting("GEMINI_MODEL", "gemini-2.5-flash-lite"))
-                result.summary_kind = summary_style
-                st.session_state.current = result
-                key = result.video_id or f"upload:{result.title}"
-                if key in st.session_state.get("history", {}):
-                    st.session_state.history[key]["result"] = deepcopy(result)
+            if existing_variant:
+                result.summary = existing_variant["text"]
+                result.summary_engine = existing_variant["engine"]
+                result.summary_note = existing_variant["note"]
+            else:
+                with st.spinner("Creating summary…"):
+                    result.summary, result.summary_engine, result.summary_note = generate_summary(
+                        result.segments, summary_style, result.video_id, target_language,
+                        read_setting("GEMINI_API_KEY"), read_setting("GEMINI_MODEL", "gemini-2.5-flash-lite"))
+            result.summary_kind = summary_style
+            st.session_state.current = result
+            st.session_state.result_summary_language = target_language
+            st.session_state.setdefault("summary_variants", {})[
+                summary_slot(summary_style, target_language)] = {
+                "text": result.summary, "engine": result.summary_engine, "note": result.summary_note}
+            key = record_id(result)
+            if key in st.session_state.get("history", {}):
+                st.session_state.history[key]["result"] = deepcopy(result)
+                st.session_state.history[key]["variants"] = deepcopy(st.session_state.summary_variants)
+            save_current()
         except Exception:
-            st.error("Could not regenerate the summary.")
+            st.error("Could not load or regenerate the summary.")
     st.markdown(result.summary)
     st.markdown("##### Export this summary to Notion")
     export_ready = summary_style == result.summary_kind
@@ -489,6 +691,7 @@ with t_transcript:
                 with st.spinner("Fetching translation from YouTube…"):
                     translated = retrieve_translation(result.video_id, result.language, translate_to)
                     st.session_state.translation = (result.video_id, translate_to, translated)
+                    save_current()
             except CaptionsUnavailable as exc:
                 st.warning(str(exc))
         current_translation = st.session_state.get("translation")
@@ -577,8 +780,18 @@ with t_ask:
         except Exception:
             st.session_state.qa_answer = find_related(result.segments, user_question, result.video_id)
             st.warning("Generative Q&A unavailable; showing matching transcript passages instead.")
+        st.session_state.setdefault("qa_items", []).append({
+            "question": user_question.strip(), "answer": st.session_state.qa_answer})
+        save_current()
     if st.session_state.get("qa_answer"):
         st.markdown(st.session_state.qa_answer)
+    previous = st.session_state.get("qa_items", [])
+    if previous:
+        with st.expander(f"💬 Saved question history ({len(previous)})"):
+            for entry in previous:
+                st.markdown("**Q:** " + entry.get("question", ""))
+                st.markdown(entry.get("answer", ""))
+                st.divider()
     st.caption("Without Gemini, this is a transcript passage search, not a generative question-answering model.")
 
 with t_compare:
