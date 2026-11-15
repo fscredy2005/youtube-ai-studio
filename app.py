@@ -138,8 +138,12 @@ def save_current() -> None:
         st.session_state.pop("library_index", None)
         st.session_state.pop("history_save_error", None)
         st.session_state.history_saved = True
+        if key in session_items:
+            session_items[key]["archive_saved"] = True
     except HistoryError as exc:
         st.session_state.history_saved = False
+        if key in session_items:
+            session_items[key]["archive_saved"] = False
         st.session_state.history_save_error = str(exc)
 
 
@@ -203,6 +207,8 @@ def make_pasted_result(text: str, title: str, video_url: str = "") -> VideoResul
 
 def go_to_result(item: dict) -> None:
     st.session_state.current = deepcopy(item["result"])
+    st.session_state.history_saved = bool(item.get("archive_saved", False))
+    st.session_state.pop("history_save_error", None)
     st.session_state.takeaways = item["takeaways"]
     st.session_state.qa_items = deepcopy(item.get("questions") or [])
     st.session_state.qa_answer = ""
@@ -231,7 +237,7 @@ def go_to_result(item: dict) -> None:
 def load_saved_record(record: dict) -> None:
     """Restores local session data without provider or AI calls."""
     video, extra = restore_record(record)
-    item = {"result": video, **extra}
+    item = {"result": video, "archive_saved": True, **extra}
     go_to_result(item)
     history = st.session_state.setdefault("history", {})
     history[record_id(video)] = deepcopy(item)
