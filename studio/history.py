@@ -34,17 +34,23 @@ def record_id(result: VideoResult) -> str:
     return "input-" + hashlib.sha256(content.encode("utf-8")).hexdigest()[:20]
 
 
+def summary_slot(style: str, language: str) -> str:
+    """Distinct saved summaries by both layout and output language."""
+    return style + "::" + (language or "English")
+
+
 def make_record(result: VideoResult, *, takeaways: str = "", variants: dict | None = None,
                 questions: list | None = None, translation: dict | None = None,
-                manual_duration: str = "") -> dict:
+                manual_duration: str = "", summary_language: str = "English") -> dict:
     summary = {"text": result.summary, "engine": result.summary_engine,
                "note": result.summary_note}
     saved = dict(variants or {})
-    saved[result.summary_kind] = summary
+    saved[summary_slot(result.summary_kind, summary_language)] = summary
     return {
         "schema_version": 1, "id": record_id(result),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "result": asdict(result), "takeaways": takeaways,
+        "summary_language": summary_language,
         "variants": saved, "questions": list(questions or []),
         "translation": translation, "manual_duration": manual_duration,
     }
@@ -70,6 +76,7 @@ def restore_record(record: dict) -> tuple[VideoResult, dict]:
         "questions": record.get("questions", []),
         "translation": record.get("translation"),
         "manual_duration": record.get("manual_duration", ""),
+        "summary_language": record.get("summary_language", "English"),
     }
 
 
