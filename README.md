@@ -70,7 +70,15 @@ and keeps only the last six analyses in its current Streamlit session.
    Once all three secrets are configured, **the entire Studio requires the
    password**, protecting both personal history and existing Gemini/Supadata keys.
 
-The **My Library** expander lets you search by title/channel and reopen an analysis.
+Use the **📚 My Library** top-level navigation view (next to **🎬 Analyze**) to
+browse saved analyses as thumbnail cards. Search by title/channel, sort by newest
+or oldest save date (or title), and click **Open analysis** to return to the Analyze
+workspace with the restored transcript, summaries and Q&A. Lists longer than 12
+records are paginated. Thumbnails are loaded from YouTube's image CDN using
+existing video IDs; uploaded/pasted transcripts show a text placeholder.
+No additional Gemini, Supadata or caption requests are made by the library.
+Saved dates are not the video's publication dates.
+
 When a previously archived YouTube URL is pasted, the app opens the existing record
 by default, with **zero additional Gemini, Supadata or caption requests**. To refresh
 the video, explicitly check *Re-analyze saved URLs*. New summaries and Q&A responses
