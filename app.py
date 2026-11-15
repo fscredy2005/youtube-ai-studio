@@ -21,6 +21,7 @@ from studio.export import transcript_txt, transcript_srt, report_markdown, repor
 from studio.notion_export import summary_markdown, summary_csv
 from studio.history import (GitHubHistory, HistoryError, make_record,
                             restore_record, record_id, verify_password, summary_slot)
+from studio.library_view import SORT_OPTIONS, formatted_saved_date, search_and_sort, thumbnail_url
 
 st.set_page_config(page_title="YouTube AI Studio", page_icon="🎬", layout="wide",
                    initial_sidebar_state="expanded")
@@ -247,6 +248,26 @@ def load_saved_record(record: dict) -> None:
     st.session_state.pop("history_save_error", None)
 
 
+def _refresh_library_index() -> None:
+    st.session_state.pop("library_index", None)
+
+
+def _open_library_analysis(saved_id: str) -> None:
+    """Button callback: restore from GitHub, then switch to Analyze workspace."""
+    if archive is None:
+        st.session_state.library_open_error = "Private library is not configured."
+        return
+    try:
+        saved = archive.load(saved_id)
+        if saved is None:
+            raise HistoryError("Saved analysis not found. Refresh the library list.")
+        load_saved_record(saved)
+        st.session_state.workspace_view = "🎬 Analyze"
+        st.session_state.pop("library_open_error", None)
+    except HistoryError as exc:
+        st.session_state.library_open_error = str(exc)
+
+
 st.markdown('''<div class="hero"><div class="eyebrow">YOUR VIDEO KNOWLEDGE WORKSPACE</div>
 <h1>▶ YouTube AI Studio</h1><p>From video to insight — transcripts, concise summaries and useful exports, all in your browser.</p></div>''',
             unsafe_allow_html=True)
@@ -275,6 +296,8 @@ with st.sidebar:
         for idx, (k, item) in enumerate(reversed(list(history.items()))):
             if st.button("↗ " + item["result"].title[:40], use_container_width=True, key=f"recent_{idx}"):
                 go_to_result(item)
+                if archive:
+                    st.session_state.workspace_view = "🎬 Analyze"
                 st.rerun()
     if st.button("Clear session", use_container_width=True, help="Forget analyses currently held in this browser session"):
         st.session_state.pop("history", None)
@@ -290,8 +313,13 @@ with st.sidebar:
         st.caption("🔒 Session only: enable private history to keep analyses after closing the browser.")
 
 if archive is not None:
-    with st.expander("📚 My Library · permanent video history", expanded=False):
-        st.caption("Search and reopen analyses without running Gemini or Supadata.")
+    workspace_view = st.segmented_control(
+        "Workspace navigation", ["🎬 Analyze", "📚 My Library"],
+        default="🎬 Analyze", key="workspace_view", label_visibility="collapsed",
+    )
+    if workspace_view == "📚 My Library":
+        st.markdown("### 📚 My Library")
+        st.caption("Your permanent video analyses — search, sort and reopen without Gemini or Supadata calls.")
         try:
             if "library_index" not in st.session_state:
                 st.session_state.library_index = archive.list_index()
@@ -299,29 +327,47 @@ if archive is not None:
         except HistoryError as exc:
             saved_entries = []
             st.error(f"Unable to load history: {exc}")
-        query = st.text_input("Search saved videos", key="library_search",
-                              placeholder="Title or channel").strip().casefold()
-        matches = [item for item in saved_entries
-                   if query in (item.get("title", "") + " " + item.get("channel", "")).casefold()]
-        st.caption(f"{len(matches)} saved analyses matching your search")
-        if matches:
-            labels = {item["id"]: f'{item.get("title", "Untitled")} · {item.get("channel", "")}'
-                      for item in matches}
-            chosen_id = st.selectbox("Select an analysis", list(labels),
-                                     format_func=lambda k: labels[k], key="library_selected")
-            if st.button("📖 Open saved analysis", key="library_open", type="primary"):
-                try:
-                    saved_record = archive.load(chosen_id)
-                    if saved_record is None:
-                        st.error("This saved analysis could not be found.")
-                    else:
-                        load_saved_record(saved_record)
-                        st.rerun()
-                except HistoryError as exc:
-                    st.error(str(exc))
-        if st.button("↻ Refresh library list", key="library_refresh"):
-            st.session_state.pop("library_index", None)
-            st.rerun()
+        search_col, sort_col, refresh_col = st.columns([3, 1.8, 1.2], vertical_alignment="bottom")
+        with search_col:
+            query = st.text_input("Search videos", placeholder="Search by title or channel",
+                                  key="library_query")
+        with sort_col:
+            sort_order = st.selectbox("Sort by", SORT_OPTIONS, key="library_sort")
+        with refresh_col:
+            st.button("↻ Refresh", on_click=_refresh_library_index,
+                      key="library_refresh", use_container_width=True)
+        if st.session_state.get("library_open_error"):
+            st.warning(st.session_state.library_open_error)
+        matches = search_and_sort(saved_entries, query, sort_order)
+        st.caption(f"{len(matches)} saved analyse{'s' if len(matches) != 1 else ''} · "
+                   "Dates are when the analysis was saved, not the YouTube publish date.")
+        if not saved_entries:
+            st.info("No saved analyses yet. Analyze a YouTube video to add your first entry.")
+        elif not matches:
+            st.info("No videos match this search. Try a title or channel name.")
+        else:
+            per_page = 12
+            pages = (len(matches) + per_page - 1) // per_page
+            page = st.selectbox("Page", list(range(1, pages + 1)), key="library_page") if pages > 1 else 1
+            for item in matches[(page - 1) * per_page: page * per_page]:
+                with st.container(border=True):
+                    image_col, details_col, action_col = st.columns(
+                        [1.35, 4, 1.4], vertical_alignment="center")
+                    with image_col:
+                        thumbnail = thumbnail_url(item.get("video_id", ""))
+                        if thumbnail:
+                            st.image(thumbnail, use_container_width=True)
+                        else:
+                            st.caption("📄 Transcript")
+                    with details_col:
+                        st.write(item.get("title") or "Untitled video")
+                        st.caption(item.get("channel") or "Unknown channel")
+                        st.caption("Saved: " + formatted_saved_date(item))
+                    with action_col:
+                        st.button("📖 Open analysis", key="lib_open_" + item["id"],
+                                  use_container_width=True,
+                                  on_click=_open_library_analysis, args=(item["id"],))
+        st.stop()
 else:
     st.caption("📚 Permanent library is optional; configure private HISTORY_* secrets to enable it.")
 
