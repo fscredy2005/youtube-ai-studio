@@ -6,7 +6,7 @@ from urllib.parse import unquote
 
 import pytest
 from studio.history import (GitHubHistory, HistoryError, make_record,
-                            record_id, restore_record, verify_password)
+                            record_id, restore_record, verify_password, summary_slot)
 from studio.models import Segment, VideoResult
 
 
@@ -102,3 +102,17 @@ def test_password_is_required_and_exact():
     assert verify_password("MySecret99", "MySecret99")
     assert not verify_password("MySecret99 ", "MySecret99")
     assert not verify_password("", "")
+
+def test_preserves_both_english_and_french_versions():
+    api = FakeGitHub()
+    store = GitHubHistory("test/private", "token", opener=api)
+    english = example()
+    store.save(make_record(english, summary_language="English"))
+    french = example()
+    french.summary = "Un résumé français"
+    store.save(make_record(french, summary_language="Français"))
+    archived = store.load(record_id(french))
+    assert archived["variants"][summary_slot("Quick summary", "English")]["text"] == "Initial summary"
+    assert archived["variants"][summary_slot("Quick summary", "Français")]["text"] == "Un résumé français"
+    _, extra = restore_record(archived)
+    assert extra["summary_language"] == "Français"
