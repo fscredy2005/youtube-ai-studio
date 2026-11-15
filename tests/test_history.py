@@ -27,8 +27,11 @@ class FakeGitHub:
     def __call__(self, request, timeout=None):
         method, url = request.get_method(), request.full_url
         self.operations.append((method, url))
-        if url.endswith("/repos/test/private/"):
+        if url.endswith("/repos/test/private"):
             return FakeResponse(json.dumps({"private": self.private}).encode())
+        if url.endswith("/repos/test/private/"):
+            # GitHub REST returns 404 on a trailing slash after the repo name.
+            raise HTTPError(url, 404, "Not Found", {}, None)
         path = unquote(url.split("/contents/", 1)[1])
         if method == "GET":
             if path not in self.files:
@@ -116,3 +119,12 @@ def test_preserves_both_english_and_french_versions():
     assert archived["variants"][summary_slot("Quick summary", "Français")]["text"] == "Un résumé français"
     _, extra = restore_record(archived)
     assert extra["summary_language"] == "Français"
+
+
+def test_private_verification_uses_canonical_repo_url():
+    fake = FakeGitHub(is_private=True)
+    archive = GitHubHistory("test/private", "restricted-token", opener=fake)
+    archive.verify_private()
+    assert fake.operations == [
+        ("GET", "https://api.github.com/repos/test/private")
+    ]
