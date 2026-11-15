@@ -121,6 +121,18 @@ def save_current() -> None:
         manual_duration=st.session_state.get(duration_key, ""),
         summary_language=st.session_state.get("result_summary_language", "English"),
     )
+    # Keep the six-item session history consistent with the durable archive.
+    session_items = st.session_state.setdefault("history", {})
+    key = record_id(result)
+    if key in session_items:
+        session_items[key] = {
+            "result": deepcopy(result), "takeaways": record["takeaways"],
+            "variants": deepcopy(record["variants"]),
+            "questions": deepcopy(record["questions"]),
+            "translation": deepcopy(record["translation"]),
+            "manual_duration": record["manual_duration"],
+            "summary_language": record["summary_language"],
+        }
     try:
         archive.save(record)
         st.session_state.pop("library_index", None)
